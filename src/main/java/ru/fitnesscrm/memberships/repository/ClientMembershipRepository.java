@@ -1,6 +1,8 @@
 package ru.fitnesscrm.memberships.repository;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
 import ru.fitnesscrm.memberships.domain.ClientMembership;
 import ru.fitnesscrm.memberships.domain.MembershipStatus;
 
@@ -17,4 +19,14 @@ public interface ClientMembershipRepository extends JpaRepository<ClientMembersh
             Long clientId,
             MembershipStatus status
     );
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            UPDATE ClientMembership cm
+            SET cm.status = :expired
+            WHERE cm.endDate < CURRENT_DATE
+              AND cm.status IN (:active, :frozen)
+            """)
+    int updateAllStatus(MembershipStatus expired, MembershipStatus active, MembershipStatus frozen);
+
 }

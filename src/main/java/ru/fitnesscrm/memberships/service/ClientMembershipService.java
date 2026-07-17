@@ -14,12 +14,14 @@ import ru.fitnesscrm.memberships.api.dto.response.ClientMembershipResponse;
 import ru.fitnesscrm.memberships.domain.ClientMembership;
 import ru.fitnesscrm.memberships.domain.MembershipStatus;
 import ru.fitnesscrm.memberships.domain.MembershipTemplate;
+import ru.fitnesscrm.memberships.mapper.MembershipMapper;
 import ru.fitnesscrm.memberships.repository.ClientMembershipRepository;
 import ru.fitnesscrm.memberships.repository.MembershipTemplateRepository;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 
 /**
  * Application service for memberships owned by individual clients.
@@ -37,6 +39,7 @@ public class ClientMembershipService {
     private final ClientMembershipRepository membershipRepository;
     private final MembershipTemplateRepository templateRepository;
     private final UserRepository userRepository;
+    private final MembershipMapper membershipMapper;
 
     @Transactional
     public ClientMembershipResponse assign(AssignMembershipRequest request) {
@@ -59,7 +62,7 @@ public class ClientMembershipService {
         membership.setStartDate(startDate);
         membership.setEndDate(startDate.plusDays(template.getDurationDays()));
 
-        return ClientMembershipResponse.from(membershipRepository.save(membership));
+        return membershipMapper.toClientMembershipResponse(membershipRepository.save(membership));
     }
 
     @Transactional(readOnly = true)
@@ -89,7 +92,7 @@ public class ClientMembershipService {
         clientMembership.setStatus(MembershipStatus.FROZEN);
         clientMembership.setFrozenAt(Instant.now());
 
-        return ClientMembershipResponse.from(clientMembership);
+        return membershipMapper.toClientMembershipResponse(clientMembership);
     }
 
     @Transactional
@@ -120,7 +123,50 @@ public class ClientMembershipService {
             clientMembership.setStatus(MembershipStatus.ACTIVE);
         }
 
-        return ClientMembershipResponse.from(clientMembership);
+        return membershipMapper.toClientMembershipResponse(clientMembership);
+    }
+
+    /**
+     * Deducts one class from a limited membership.
+     * Unlimited memberships ({@code remainingClasses == null}) are left unchanged.
+     * Uses entity {@code @Version} so concurrent deductions cannot drive the counter negative.
+     */
+    @Transactional
+    public ClientMembershipResponse deductClass(Long membershipId) {
+        ClientMembership clientMembership = requireAccessibleMembership(membershipId);
+
+        if (clientMembership.getStatus() != MembershipStatus.ACTIVE) {
+            throw new BusinessException("Only ACTIVE memberships can have classes deducted");
+        }
+
+        Integer remainingClasses = clientMembership.getRemainingClasses();
+        if (remainingClasses == null) {
+            return membershipMapper.toClientMembershipResponse(clientMembership);
+        }
+        if (remainingClasses <= 0) {
+            throw new BusinessException("No remaining classes to deduct");
+        }
+
+        int next = remainingClasses - 1;
+        clientMembership.setRemainingClasses(next);
+        if (next == 0) {
+            clientMembership.setStatus(MembershipStatus.DEPLETED);
+        }
+
+        return membershipMapper.toClientMembershipResponse(clientMembership);
+    }
+
+    @Transactional(readOnly = true)
+    public List<ClientMembershipResponse> findClientMemberships(Long clientId) {
+        requireTenantId();
+        if (Role.CLIENT.equals(TenantContext.getRole())
+                && !TenantContext.getUserId().equals(clientId)) {
+            throw new AccessDeniedException("Access denied to this client's memberships");
+        }
+
+        return membershipMapper.toClientMembershipResponseList(
+                membershipRepository.findByClientIdAndStatus(clientId, MembershipStatus.ACTIVE)
+        );
     }
 
     /**

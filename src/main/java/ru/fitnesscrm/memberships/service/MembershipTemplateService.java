@@ -8,6 +8,7 @@ import ru.fitnesscrm.common.tenant.TenantContext;
 import ru.fitnesscrm.memberships.api.dto.request.CreateMembershipTemplateRequest;
 import ru.fitnesscrm.memberships.api.dto.response.MembershipTemplateResponse;
 import ru.fitnesscrm.memberships.domain.MembershipTemplate;
+import ru.fitnesscrm.memberships.mapper.MembershipMapper;
 import ru.fitnesscrm.memberships.repository.MembershipTemplateRepository;
 
 import java.util.List;
@@ -17,18 +18,17 @@ import java.util.List;
 public class MembershipTemplateService {
 
     private final MembershipTemplateRepository templateRepository;
+    private final MembershipMapper membershipMapper;
 
     @Transactional(readOnly = true)
     public List<MembershipTemplateResponse> findAllActive() {
-        return templateRepository.findByActiveTrue().stream()
-                .map(MembershipTemplateResponse::from)
-                .toList();
+        return membershipMapper.toMembershipTemplateResponseList(templateRepository.findByActiveTrue());
     }
 
     @Transactional(readOnly = true)
     public MembershipTemplateResponse findById(Long id) {
         return templateRepository.findById(id)
-                .map(MembershipTemplateResponse::from)
+                .map(membershipMapper::toMembershipTemplateResponse)
                 .orElseThrow(() -> new ResourceNotFoundException("Membership template not found: " + id));
     }
 
@@ -42,7 +42,7 @@ public class MembershipTemplateService {
         template.setClassLimit(request.classLimit());
         template.setDurationDays(request.durationDays());
         template.setActive(true);
-        return MembershipTemplateResponse.from(templateRepository.save(template));
+        return membershipMapper.toMembershipTemplateResponse(templateRepository.save(template));
     }
 
     private Long requireTenantId() {
