@@ -5,10 +5,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.access.AccessDeniedException;
+import org.mapstruct.factory.Mappers;
 import ru.fitnesscrm.common.exception.BusinessException;
 import ru.fitnesscrm.common.exception.ResourceNotFoundException;
 import ru.fitnesscrm.common.tenant.TenantContext;
@@ -18,15 +18,18 @@ import ru.fitnesscrm.memberships.api.dto.response.ClientMembershipResponse;
 import ru.fitnesscrm.memberships.domain.ClientMembership;
 import ru.fitnesscrm.memberships.domain.MembershipStatus;
 import ru.fitnesscrm.memberships.domain.MembershipTemplate;
+import ru.fitnesscrm.memberships.mapper.MembershipMapper;
 import ru.fitnesscrm.memberships.repository.ClientMembershipRepository;
 import ru.fitnesscrm.memberships.repository.MembershipTemplateRepository;
 
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -50,7 +53,8 @@ class ClientMembershipServiceTest {
     @Mock
     private UserRepository userRepository;
 
-    @InjectMocks
+    private final MembershipMapper membershipMapper = Mappers.getMapper(MembershipMapper.class);
+
     private ClientMembershipService clientMembershipService;
 
     private ClientMembership membership;
@@ -58,6 +62,13 @@ class ClientMembershipServiceTest {
 
     @BeforeEach
     void setUp() {
+        clientMembershipService = new ClientMembershipService(
+                membershipRepository,
+                templateRepository,
+                userRepository,
+                membershipMapper
+        );
+
         template = new MembershipTemplate();
         template.setId(1L);
         template.setName("8 Classes / Month");
@@ -73,6 +84,7 @@ class ClientMembershipServiceTest {
         membership.setStartDate(LocalDate.now());
         membership.setEndDate(LocalDate.now().plusDays(30));
         membership.setFrozenAt(null);
+        membership.setVersion(0L);
 
         TenantContext.set(TENANT_ID, CLIENT_ID, Role.CLIENT);
     }
@@ -246,5 +258,84 @@ class ClientMembershipServiceTest {
         when(membershipRepository.findById(MEMBERSHIP_ID)).thenReturn(Optional.of(membership));
 
         assertThrows(BusinessException.class, () -> clientMembershipService.unfreeze(MEMBERSHIP_ID));
+    }
+
+    @Test
+    @DisplayName("deductClass: decreases remaining classes by one")
+    void deductClass_shouldDecreaseRemainingClasses() {
+        membership.setRemainingClasses(3);
+        when(membershipRepository.findById(MEMBERSHIP_ID)).thenReturn(Optional.of(membership));
+
+        ClientMembershipResponse response = clientMembershipService.deductClass(MEMBERSHIP_ID);
+
+        assertEquals(2, response.remainingClasses());
+        assertEquals(MembershipStatus.ACTIVE, response.status());
+    }
+
+    @Test
+    @DisplayName("deductClass: last class → DEPLETED and booking check fails")
+    void deductClass_shouldDeplete_whenLastClassIsDeducted() {
+        membership.setRemainingClasses(1);
+        when(membershipRepository.findById(MEMBERSHIP_ID)).thenReturn(Optional.of(membership));
+        when(membershipRepository.findFirstByClientIdAndStatusOrderByEndDateDesc(CLIENT_ID, MembershipStatus.ACTIVE))
+                .thenReturn(Optional.empty());
+
+        ClientMembershipResponse response = clientMembershipService.deductClass(MEMBERSHIP_ID);
+
+        assertEquals(0, response.remainingClasses());
+        assertEquals(MembershipStatus.DEPLETED, response.status());
+        assertFalse(clientMembershipService.hasActiveMembershipWithClasses(CLIENT_ID));
+    }
+
+    @Test
+    @DisplayName("deductClass: unlimited membership stays ACTIVE with null remainingClasses")
+    void deductClass_shouldKeepUnlimitedMembershipActive() {
+        membership.setRemainingClasses(null);
+        when(membershipRepository.findById(MEMBERSHIP_ID)).thenReturn(Optional.of(membership));
+
+        ClientMembershipResponse response = clientMembershipService.deductClass(MEMBERSHIP_ID);
+
+        assertNull(response.remainingClasses());
+        assertEquals(MembershipStatus.ACTIVE, response.status());
+    }
+
+    @Test
+    @DisplayName("deductClass: rejects when remainingClasses is already 0")
+    void deductClass_shouldReject_whenNoClassesLeft() {
+        membership.setRemainingClasses(0);
+        when(membershipRepository.findById(MEMBERSHIP_ID)).thenReturn(Optional.of(membership));
+
+        assertThrows(BusinessException.class, () -> clientMembershipService.deductClass(MEMBERSHIP_ID));
+    }
+
+    @Test
+    @DisplayName("deductClass: rejects non-ACTIVE membership")
+    void deductClass_shouldReject_whenStatusIsFrozen() {
+        membership.setStatus(MembershipStatus.FROZEN);
+        when(membershipRepository.findById(MEMBERSHIP_ID)).thenReturn(Optional.of(membership));
+
+        assertThrows(BusinessException.class, () -> clientMembershipService.deductClass(MEMBERSHIP_ID));
+    }
+
+    @Test
+    @DisplayName("findClientMemberships: client cannot list another client's memberships")
+    void findClientMemberships_shouldDenyAccess_whenClientRequestsSomeoneElse() {
+        assertThrows(
+                AccessDeniedException.class,
+                () -> clientMembershipService.findClientMemberships(OTHER_CLIENT_ID)
+        );
+    }
+
+    @Test
+    @DisplayName("findClientMemberships: returns ACTIVE memberships for requested client")
+    void findClientMemberships_shouldReturnActiveMemberships() {
+        when(membershipRepository.findByClientIdAndStatus(CLIENT_ID, MembershipStatus.ACTIVE))
+                .thenReturn(List.of(membership));
+
+        List<ClientMembershipResponse> responses = clientMembershipService.findClientMemberships(CLIENT_ID);
+
+        assertEquals(1, responses.size());
+        assertEquals(MEMBERSHIP_ID, responses.getFirst().id());
+        assertEquals("8 Classes / Month", responses.getFirst().templateName());
     }
 }
