@@ -10,6 +10,8 @@ import ru.fitnesscrm.scheduling.api.dto.response.ClassSessionResponse;
 import ru.fitnesscrm.scheduling.domain.ClassSession;
 import ru.fitnesscrm.scheduling.repository.ClassSessionRepository;
 
+import java.time.Instant;
+
 /**
  * TODO (your exercise): implement the Conflict Resolver before saving a ClassSession.
  * Query trainer and facility overlapping intervals:
@@ -27,8 +29,21 @@ public class ClassSessionService {
         if (!request.endTime().isAfter(request.startTime())) {
             throw new BusinessException("End time must be after start time");
         }
+        if (request.startTime().isBefore(Instant.now())) {
+            throw new BusinessException("Start time must be after now");
+        }
 
-        // TODO: call findTrainerConflicts / findFacilityConflicts and reject overlaps
+        boolean isTrainerConflict = !classSessionRepository.findTrainerConflicts(request.trainerId(),
+                request.startTime(), request.endTime()).isEmpty();
+        boolean isFacilityConflict = !classSessionRepository.findFacilityConflicts(request.facilityId(),
+                request.startTime(), request.endTime()).isEmpty();
+
+        if (isFacilityConflict) {
+            throw new BusinessException("Facility already booked");
+        }
+        if (isTrainerConflict) {
+            throw new BusinessException("Class on that time already booked by another trainer");
+        }
 
         ClassSession session = new ClassSession();
         session.setTenantId(TenantContext.getTenantId());
