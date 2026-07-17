@@ -61,6 +61,26 @@ public class MembershipController {
         return ApiResponse.ok(clientMembershipService.assign(request));
     }
 
+    @GetMapping("/clients/{clientId}")
+    @PreAuthorize("hasAnyRole('TENANT_ADMIN', 'TRAINER', 'CLIENT')")
+    @Operation(
+            summary = "List ACTIVE memberships for a client",
+            description = "CLIENT may list only their own memberships. Staff may list any client in the current tenant."
+    )
+    public ApiResponse<List<ClientMembershipResponse>> findClientMemberships(@PathVariable Long clientId) {
+        return ApiResponse.ok(clientMembershipService.findClientMemberships(clientId));
+    }
+
+    @PostMapping("/{id}/deduct-class")
+    @PreAuthorize("hasAnyRole('TENANT_ADMIN', 'TRAINER')")
+    @Operation(
+            summary = "Deduct one class from a membership",
+            description = "Internal/staff operation. Unlimited memberships are unchanged. Last class → DEPLETED."
+    )
+    public ApiResponse<ClientMembershipResponse> deductClass(@PathVariable("id") Long id) {
+        return ApiResponse.ok(clientMembershipService.deductClass(id));
+    }
+
     @PostMapping("/{id}/freeze")
     @PreAuthorize("hasAnyRole('TENANT_ADMIN', 'TRAINER', 'CLIENT')")
     @Operation(
