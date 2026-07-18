@@ -13,4 +13,9 @@ public class MembershipFacade {
     public boolean canBookClasses(Long clientId) {
         return clientMembershipService.hasActiveMembershipWithClasses(clientId);
     }
+
+    /** Deducts one class from the client's active membership (used by late cancel / no-show). */
+    public void deductClassForClient(Long clientId) {
+        clientMembershipService.deductClassForClient(clientId);
+    }
 }
