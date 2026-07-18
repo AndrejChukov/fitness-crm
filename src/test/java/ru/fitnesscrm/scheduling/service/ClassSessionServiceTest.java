@@ -1,4 +1,5 @@
-import static org.junit.jupiter.api.Assertions.*;
+package ru.fitnesscrm.scheduling.service;
+
 class ClassSessionServiceTest {
-  
+
 }
