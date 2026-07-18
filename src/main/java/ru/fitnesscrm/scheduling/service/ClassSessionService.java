@@ -9,44 +9,48 @@ import ru.fitnesscrm.scheduling.api.dto.request.CreateClassSessionRequest;
 import ru.fitnesscrm.scheduling.api.dto.response.ClassSessionResponse;
 import ru.fitnesscrm.scheduling.domain.ClassSession;
 import ru.fitnesscrm.scheduling.repository.ClassSessionRepository;
+import ru.fitnesscrm.scheduling.repository.FacilityRepository;
 
 import java.time.Instant;
 
-/**
- * TODO (your exercise): implement the Conflict Resolver before saving a ClassSession.
- * Query trainer and facility overlapping intervals:
- * (start_time &lt; new_end) AND (end_time &gt; new_start)
- * Throw BusinessException when trainer or facility is already booked.
- */
 @Service
 @AllArgsConstructor
 public class ClassSessionService {
 
     private final ClassSessionRepository classSessionRepository;
+    private final FacilityRepository facilityRepository;
 
     @Transactional
     public ClassSessionResponse create(CreateClassSessionRequest request) {
+        Long tenantId = requireTenantId();
+
         if (!request.endTime().isAfter(request.startTime())) {
             throw new BusinessException("End time must be after start time");
         }
-        if (request.startTime().isBefore(Instant.now())) {
-            throw new BusinessException("Start time must be after now");
+        if (!request.startTime().isAfter(Instant.now())) {
+            throw new BusinessException("Start time must be in the future");
         }
 
-        boolean isTrainerConflict = !classSessionRepository.findTrainerConflicts(request.trainerId(),
-                request.startTime(), request.endTime()).isEmpty();
-        boolean isFacilityConflict = !classSessionRepository.findFacilityConflicts(request.facilityId(),
-                request.startTime(), request.endTime()).isEmpty();
+        facilityRepository.findById(request.facilityId())
+                .filter(facility -> tenantId.equals(facility.getTenantId()))
+                .orElseThrow(() -> new BusinessException("Facility not found in current tenant"));
 
-        if (isFacilityConflict) {
-            throw new BusinessException("Facility already booked");
+        boolean trainerConflict = !classSessionRepository
+                .findTrainerConflicts(request.trainerId(), request.startTime(), request.endTime())
+                .isEmpty();
+        boolean facilityConflict = !classSessionRepository
+                .findFacilityConflicts(request.facilityId(), request.startTime(), request.endTime())
+                .isEmpty();
+
+        if (trainerConflict) {
+            throw new BusinessException("Trainer is already assigned to another class at this time");
         }
-        if (isTrainerConflict) {
-            throw new BusinessException("Class on that time already booked by another trainer");
+        if (facilityConflict) {
+            throw new BusinessException("Facility is already booked at this time");
         }
 
         ClassSession session = new ClassSession();
-        session.setTenantId(TenantContext.getTenantId());
+        session.setTenantId(tenantId);
         session.setFacilityId(request.facilityId());
         session.setTrainerId(request.trainerId());
         session.setTitle(request.title());
@@ -56,5 +60,13 @@ public class ClassSessionService {
         session.setMaxCapacity(request.maxCapacity());
 
         return ClassSessionResponse.from(classSessionRepository.save(session));
+    }
+
+    private Long requireTenantId() {
+        Long tenantId = TenantContext.getTenantId();
+        if (tenantId == null) {
+            throw new BusinessException("Tenant context is required");
+        }
+        return tenantId;
     }
 }
