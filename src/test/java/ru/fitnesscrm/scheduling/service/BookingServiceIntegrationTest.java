@@ -44,6 +44,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -216,7 +217,8 @@ class BookingServiceIntegrationTest extends AbstractIntegrationTest {
 
     /**
      * Acceptance: two concurrent books against capacity=1 must not create two CONFIRMED bookings.
-     * Loser gets BusinessException (optimistic lock conflict or "full", depending on timing).
+     * Loser gets ObjectOptimisticLockingFailureException or BusinessException ("full"), depending on timing.
+     * HTTP maps the lock failure via {@code GlobalExceptionHandler} → 409.
      */
     @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
@@ -259,6 +261,89 @@ class BookingServiceIntegrationTest extends AbstractIntegrationTest {
         assertEquals(1, failures.get());
     }
 
+    @Test
+    void cancel_shouldBeFree_whenMoreThan12HoursBeforeStart() {
+        ClassSession farSession = saveSession(
+                Instant.now().plus(24, ChronoUnit.HOURS),
+                Instant.now().plus(25, ChronoUnit.HOURS),
+                5
+        );
+        bookingService.book(new CreateBookingRequest(farSession.getId(), client.getId()));
+        Booking booking = requireBooking(farSession.getId());
+        int remainingBefore = membership.getRemainingClasses();
+
+        bookingService.cancel(booking.getId());
+
+        entityManager.flush();
+        entityManager.clear();
+
+        Booking cancelled = bookingRepository.findById(booking.getId()).orElseThrow();
+        assertEquals(BookingStatus.CANCELLED, cancelled.getStatus());
+        assertNotNull(cancelled.getCancelledAt());
+
+        ClientMembership refreshed = clientMembershipRepository.findById(membership.getId()).orElseThrow();
+        assertEquals(remainingBefore, refreshed.getRemainingClasses());
+    }
+
+    @Test
+    void cancel_shouldDeductClass_whenLessThan12HoursBeforeStart() {
+        // setUp session starts in 10h → late cancel
+        bookingService.book(new CreateBookingRequest(classSession.getId(), client.getId()));
+        Booking booking = requireBooking(classSession.getId());
+        int remainingBefore = membership.getRemainingClasses();
+
+        bookingService.cancel(booking.getId());
+
+        entityManager.flush();
+        entityManager.clear();
+
+        Booking cancelled = bookingRepository.findById(booking.getId()).orElseThrow();
+        assertEquals(BookingStatus.LATE_CANCELED, cancelled.getStatus());
+        assertNotNull(cancelled.getCancelledAt());
+
+        ClientMembership refreshed = clientMembershipRepository.findById(membership.getId()).orElseThrow();
+        assertEquals(remainingBefore - 1, refreshed.getRemainingClasses());
+    }
+
+    /**
+     * Boundary: remaining time until start == 12h → LATE_CANCELED + deduct.
+     * Free cancel requires a strictly later start ({@code > 12h}).
+     */
+    @Test
+    void cancel_shouldDeductClass_whenExactly12HoursBeforeStart() {
+        Instant start = Instant.now().plus(12, ChronoUnit.HOURS);
+        ClassSession boundarySession = saveSession(start, start.plus(1, ChronoUnit.HOURS), 5);
+        bookingService.book(new CreateBookingRequest(boundarySession.getId(), client.getId()));
+        Booking booking = requireBooking(boundarySession.getId());
+        int remainingBefore = membership.getRemainingClasses();
+
+        bookingService.cancel(booking.getId());
+
+        entityManager.flush();
+        entityManager.clear();
+
+        Booking cancelled = bookingRepository.findById(booking.getId()).orElseThrow();
+        assertEquals(BookingStatus.LATE_CANCELED, cancelled.getStatus());
+
+        ClientMembership refreshed = clientMembershipRepository.findById(membership.getId()).orElseThrow();
+        assertEquals(remainingBefore - 1, refreshed.getRemainingClasses());
+    }
+
+    @Test
+    void cancel_shouldReject_whenBookingAlreadyCancelled() {
+        ClassSession farSession = saveSession(
+                Instant.now().plus(24, ChronoUnit.HOURS),
+                Instant.now().plus(25, ChronoUnit.HOURS),
+                5
+        );
+        bookingService.book(new CreateBookingRequest(farSession.getId(), client.getId()));
+        Booking booking = requireBooking(farSession.getId());
+        bookingService.cancel(booking.getId());
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> bookingService.cancel(booking.getId()));
+        assertEquals("Only confirmed bookings can be cancelled", ex.getMessage());
+    }
+
     private void bookWhenReady(
             CountDownLatch ready,
             CountDownLatch start,
@@ -275,7 +360,7 @@ class BookingServiceIntegrationTest extends AbstractIntegrationTest {
             try {
                 bookingService.book(new CreateBookingRequest(sessionId, clientId));
                 successes.incrementAndGet();
-            } catch (BusinessException e) {
+            } catch (BusinessException | ObjectOptimisticLockingFailureException e) {
                 failures.incrementAndGet();
             } finally {
                 TenantContext.clear();
@@ -284,6 +369,25 @@ class BookingServiceIntegrationTest extends AbstractIntegrationTest {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(e);
         }
+    }
+
+    private Booking requireBooking(Long sessionId) {
+        return bookingRepository.findAll().stream()
+                .filter(b -> sessionId.equals(b.getClassSessionId()))
+                .findFirst()
+                .orElseThrow();
+    }
+
+    private ClassSession saveSession(Instant start, Instant end, int maxCapacity) {
+        ClassSession session = new ClassSession();
+        session.setTenantId(tenant.getId());
+        session.setFacilityId(facility.getId());
+        session.setTrainerId(trainer.getId());
+        session.setTitle("session-" + System.nanoTime());
+        session.setStartTime(start);
+        session.setEndTime(end);
+        session.setMaxCapacity(maxCapacity);
+        return classSessionRepository.save(session);
     }
 
     private User saveUser(String email, Role role) {
