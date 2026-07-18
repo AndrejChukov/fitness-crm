@@ -9,6 +9,8 @@ import ru.fitnesscrm.common.tenant.TenantContext;
 import ru.fitnesscrm.finance.facade.FinanceFacade;
 import ru.fitnesscrm.identity.domain.Role;
 import ru.fitnesscrm.memberships.facade.MembershipFacade;
+import ru.fitnesscrm.memberships.repository.ClientMembershipRepository;
+import ru.fitnesscrm.memberships.service.ClientMembershipService;
 import ru.fitnesscrm.scheduling.api.dto.request.CreateBookingRequest;
 import ru.fitnesscrm.scheduling.domain.Booking;
 import ru.fitnesscrm.scheduling.domain.BookingStatus;
@@ -18,19 +20,18 @@ import ru.fitnesscrm.scheduling.repository.ClassSessionRepository;
 
 import java.time.Instant;
 
-/**
- * TODO (your exercise): complete booking validation with:
- * - ClassSession capacity check with @Version optimistic locking
- * - cancellation policy: &gt;12h = CANCELLED, &lt;12h = LATE_CANCELED + deduct class
- */
 @Service
 @AllArgsConstructor
 public class BookingService {
 
     private final MembershipFacade membershipFacade;
+    private final ClientMembershipService clientMembershipService;
     private final FinanceFacade financeFacade;
+
     private final ClassSessionRepository classSessionRepository;
     private final BookingRepository bookingRepository;
+    private final ClientMembershipRepository membershipRepository;
+
 
     @Transactional
     public void book(CreateBookingRequest request) {
@@ -58,6 +59,9 @@ public class BookingService {
         if (confirmed >= classSession.getMaxCapacity()) {
             throw new BusinessException("Class session is full");
         }
+
+        classSession.setUpdatedAt(Instant.now());
+        classSessionRepository.saveAndFlush(classSession);
 
         Booking booking = new Booking();
         booking.setTenantId(tenantId);
