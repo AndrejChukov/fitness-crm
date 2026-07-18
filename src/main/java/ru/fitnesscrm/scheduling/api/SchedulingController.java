@@ -15,6 +15,7 @@ import ru.fitnesscrm.scheduling.api.dto.request.CreateFacilityRequest;
 import ru.fitnesscrm.scheduling.api.dto.response.ClassSessionResponse;
 import ru.fitnesscrm.scheduling.api.dto.request.CreateBookingRequest;
 import ru.fitnesscrm.scheduling.api.dto.response.FacilityResponse;
+import ru.fitnesscrm.scheduling.domain.Booking;
 import ru.fitnesscrm.scheduling.service.BookingService;
 import ru.fitnesscrm.scheduling.service.ClassSessionService;
 import ru.fitnesscrm.scheduling.service.FacilityService;
@@ -59,5 +60,12 @@ public class SchedulingController {
     public ApiResponse<Void> book(@Valid @RequestBody CreateBookingRequest request) {
         bookingService.book(request);
         return ApiResponse.okMessage("Booking created");
+    }
+
+    @PostMapping("/bookings/{id}/cancel")
+    @PreAuthorize("hasAnyRole('TENANT_ADMIN', 'TRAINER', 'CLIENT')")
+    public ApiResponse<Void> cancel(@PathVariable Long id) {
+        bookingService.cancel(id);
+        return ApiResponse.okMessage("Booking cancelled");
     }
 }

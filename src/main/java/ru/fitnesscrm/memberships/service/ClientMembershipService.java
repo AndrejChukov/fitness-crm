@@ -126,6 +126,13 @@ public class ClientMembershipService {
         return membershipMapper.toClientMembershipResponse(clientMembership);
     }
 
+    @Transactional
+    public void deductClassForClient(Long clientId) {
+        ClientMembership membership = membershipRepository.findFirstByClientIdAndStatusOrderByEndDateDesc(clientId, MembershipStatus.ACTIVE)
+                .orElseThrow(() -> new ResourceNotFoundException("Membership not found"));
+        deductClass(membership.getId());
+    }
+
     /**
      * Deducts one class from a limited membership.
      * Unlimited memberships ({@code remainingClasses == null}) are left unchanged.
