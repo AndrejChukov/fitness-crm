@@ -7,6 +7,7 @@ import org.springframework.transaction.annotation.Transactional;
 import ru.fitnesscrm.common.exception.BusinessException;
 import ru.fitnesscrm.common.exception.ResourceNotFoundException;
 import ru.fitnesscrm.common.tenant.TenantContext;
+import ru.fitnesscrm.finance.facade.FinanceFacade;
 import ru.fitnesscrm.identity.domain.Role;
 import ru.fitnesscrm.identity.repository.UserRepository;
 import ru.fitnesscrm.memberships.api.dto.request.AssignMembershipRequest;
@@ -36,6 +37,8 @@ public class ClientMembershipService {
 
     private static final int MAX_FREEZE_DAYS = 14;
 
+    private final FinanceFacade financeFacade;
+
     private final ClientMembershipRepository membershipRepository;
     private final MembershipTemplateRepository templateRepository;
     private final UserRepository userRepository;
@@ -62,7 +65,11 @@ public class ClientMembershipService {
         membership.setStartDate(startDate);
         membership.setEndDate(startDate.plusDays(template.getDurationDays()));
 
-        return membershipMapper.toClientMembershipResponse(membershipRepository.save(membership));
+        ClientMembership savedMembership = membershipRepository.save(membership);
+
+        financeFacade.createInvoiceForMembership(savedMembership.getId(), savedMembership.getClientId(), template.getPrice());
+
+        return membershipMapper.toClientMembershipResponse(savedMembership);
     }
 
     @Transactional(readOnly = true)
