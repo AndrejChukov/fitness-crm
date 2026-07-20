@@ -12,6 +12,7 @@ import org.mapstruct.factory.Mappers;
 import ru.fitnesscrm.common.exception.BusinessException;
 import ru.fitnesscrm.common.exception.ResourceNotFoundException;
 import ru.fitnesscrm.common.tenant.TenantContext;
+import ru.fitnesscrm.finance.facade.FinanceFacade;
 import ru.fitnesscrm.identity.domain.Role;
 import ru.fitnesscrm.identity.repository.UserRepository;
 import ru.fitnesscrm.memberships.api.dto.response.ClientMembershipResponse;
@@ -52,6 +53,8 @@ class ClientMembershipServiceTest {
     private MembershipTemplateRepository templateRepository;
     @Mock
     private UserRepository userRepository;
+    @Mock
+    private FinanceFacade financeFacade;
 
     private final MembershipMapper membershipMapper = Mappers.getMapper(MembershipMapper.class);
 
@@ -63,6 +66,7 @@ class ClientMembershipServiceTest {
     @BeforeEach
     void setUp() {
         clientMembershipService = new ClientMembershipService(
+                financeFacade,
                 membershipRepository,
                 templateRepository,
                 userRepository,
