@@ -3,15 +3,13 @@ package ru.fitnesscrm.finance.service;
 import lombok.AllArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import ru.fitnesscrm.common.api.ApiResponse;
 import ru.fitnesscrm.common.exception.BusinessException;
 import ru.fitnesscrm.common.exception.ResourceNotFoundException;
 import ru.fitnesscrm.common.tenant.TenantContext;
-import ru.fitnesscrm.finance.domain.ClientAccount;
-import ru.fitnesscrm.finance.domain.Invoice;
-import ru.fitnesscrm.finance.domain.InvoiceStatus;
+import ru.fitnesscrm.finance.domain.*;
 import ru.fitnesscrm.finance.repository.ClientAccountRepository;
 import ru.fitnesscrm.finance.repository.InvoiceRepository;
+import ru.fitnesscrm.finance.repository.TransactionRepository;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -29,6 +27,7 @@ public class FinanceService {
 
     private final ClientAccountRepository clientAccountRepository;
     private final InvoiceRepository invoiceRepository;
+    private final TransactionRepository transactionRepository;
 
     @Transactional
     public void makeInvoice(Long membershipId, Long clientId, BigDecimal amount) {
@@ -54,15 +53,43 @@ public class FinanceService {
         invoiceRepository.save(invoice);
     }
 
-    private Long requiredTenantId() {
-        Long tenantId = TenantContext.getTenantId();
-        if (tenantId == null) throw new BusinessException("Tenant id is required");
-        return tenantId;
+    @Transactional
+    public void pay(Long invoiceId, PaymentMethod method) {
+        Invoice invoice = invoiceRepository.findById(invoiceId)
+                .orElseThrow(() -> new ResourceNotFoundException("Invoice not found"));
+
+        if (!requiredTenantId().equals(invoice.getTenantId())) {
+            throw new ResourceNotFoundException("Invoice not found");
+        }
+        if (invoice.getStatus() != InvoiceStatus.UNPAID
+                && invoice.getStatus() != InvoiceStatus.OVERDUE) {
+            throw new BusinessException("Invoice is already paid");
+        }
+
+        ClientAccount account = clientAccountRepository.findByClientId(invoice.getClientId())
+                .orElseThrow(() -> new ResourceNotFoundException("Client account not found"));
+
+        account.setBalance(account.getBalance().add(invoice.getAmount()));
+
+        invoice.setStatus(InvoiceStatus.PAID);
+        invoice.setPaidAt(Instant.now());
+
+        Transaction transaction = new Transaction();
+        transaction.setInvoiceId(invoice.getId());
+        transaction.setAmount(invoice.getAmount());
+        transaction.setMethod(method);
+        transactionRepository.save(transaction);
     }
 
     public boolean hasNonNegativeBalance(Long clientId) {
         return clientAccountRepository.findByClientId(clientId)
                 .map(account -> account.getBalance().compareTo(BigDecimal.ZERO) >= 0)
                 .orElse(true);
+    }
+
+    private Long requiredTenantId() {
+        Long tenantId = TenantContext.getTenantId();
+        if (tenantId == null) throw new BusinessException("Tenant id is required");
+        return tenantId;
     }
 }
