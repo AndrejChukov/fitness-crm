@@ -5,6 +5,7 @@ import lombok.Getter;
 import lombok.Setter;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
+import ru.fitnesscrm.audit.listener.AuditEntityListener;
 import ru.fitnesscrm.common.domain.TenantEntity;
 
 import java.time.Instant;
@@ -14,6 +15,7 @@ import java.time.LocalDate;
 @Setter
 @Entity
 @Table(name = "client_memberships")
+@EntityListeners(AuditEntityListener.class)
 public class ClientMembership extends TenantEntity {
 
     @Column(name = "client_id", nullable = false)
@@ -27,6 +29,9 @@ public class ClientMembership extends TenantEntity {
     @JdbcTypeCode(SqlTypes.NAMED_ENUM)
     @Column(nullable = false, columnDefinition = "membership_status")
     private MembershipStatus status = MembershipStatus.ACTIVE;
+
+    @Transient
+    private MembershipStatus originalStatus;
 
     @Column(name = "remaining_classes")
     private Integer remainingClasses;
@@ -45,4 +50,10 @@ public class ClientMembership extends TenantEntity {
 
     @Version
     private Long version;
+
+    @PostLoad
+    public void postLoad() {
+        this.originalStatus = this.status;
+    }
+
 }
