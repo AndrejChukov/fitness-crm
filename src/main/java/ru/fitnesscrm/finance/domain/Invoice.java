@@ -1,14 +1,11 @@
 package ru.fitnesscrm.finance.domain;
 
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.EnumType;
-import jakarta.persistence.Enumerated;
-import jakarta.persistence.Table;
+import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
+import ru.fitnesscrm.audit.listener.AuditEntityListener;
 import ru.fitnesscrm.common.domain.TenantEntity;
 
 import java.math.BigDecimal;
@@ -19,6 +16,7 @@ import java.time.LocalDate;
 @Setter
 @Entity
 @Table(name = "invoices")
+@EntityListeners(AuditEntityListener.class)
 public class Invoice extends TenantEntity {
 
     @Column(name = "client_id", nullable = false)
@@ -35,9 +33,17 @@ public class Invoice extends TenantEntity {
     @Column(nullable = false, columnDefinition = "invoice_status")
     private InvoiceStatus status = InvoiceStatus.UNPAID;
 
+    @Transient
+    private InvoiceStatus originalStatus;
+
     @Column(name = "due_date", nullable = false)
     private LocalDate dueDate;
 
     @Column(name = "paid_at")
     private Instant paidAt;
+
+    @PostLoad
+    public void postLoad() {
+        this.originalStatus = this.status;
+    }
 }
