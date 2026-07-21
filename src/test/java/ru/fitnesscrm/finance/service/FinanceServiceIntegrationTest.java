@@ -6,12 +6,17 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
+import ru.fitnesscrm.common.exception.BusinessException;
+import ru.fitnesscrm.common.exception.ResourceNotFoundException;
 import ru.fitnesscrm.common.tenant.TenantContext;
 import ru.fitnesscrm.finance.domain.ClientAccount;
 import ru.fitnesscrm.finance.domain.Invoice;
 import ru.fitnesscrm.finance.domain.InvoiceStatus;
+import ru.fitnesscrm.finance.domain.PaymentMethod;
+import ru.fitnesscrm.finance.domain.Transaction;
 import ru.fitnesscrm.finance.repository.ClientAccountRepository;
 import ru.fitnesscrm.finance.repository.InvoiceRepository;
+import ru.fitnesscrm.finance.repository.TransactionRepository;
 import ru.fitnesscrm.identity.domain.Role;
 import ru.fitnesscrm.identity.domain.Tenant;
 import ru.fitnesscrm.identity.domain.User;
@@ -33,6 +38,8 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @Transactional
@@ -40,6 +47,7 @@ class FinanceServiceIntegrationTest extends AbstractIntegrationTest {
 
     @Autowired ClientAccountRepository clientAccountRepository;
     @Autowired InvoiceRepository invoiceRepository;
+    @Autowired TransactionRepository transactionRepository;
     @Autowired TenantRepository tenantRepository;
     @Autowired UserRepository userRepository;
     @Autowired ClientMembershipRepository clientMembershipRepository;
@@ -113,11 +121,7 @@ class FinanceServiceIntegrationTest extends AbstractIntegrationTest {
 
     @Test
     void makeInvoice_shouldNotResetExistingAccountBalance() {
-        ClientAccount existing = new ClientAccount();
-        existing.setTenantId(tenant.getId());
-        existing.setClientId(client.getId());
-        existing.setBalance(new BigDecimal("50.00"));
-        clientAccountRepository.save(existing);
+        saveAccount(new BigDecimal("50.00"));
 
         financeService.makeInvoice(clientMembership.getId(), client.getId(), new BigDecimal("1000.00"));
 
@@ -145,40 +149,180 @@ class FinanceServiceIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void pay_shouldMarkPaid_clearDebt_andCreateTransaction() {
+        ClientAccount account = saveAccount(new BigDecimal("-1000.00"));
+        Invoice invoice = saveUnpaidInvoice(new BigDecimal("1000.00"));
+
+        financeService.pay(invoice.getId(), PaymentMethod.CARD);
+
+        entityManager.flush();
+        entityManager.clear();
+
+        Invoice paid = invoiceRepository.findById(invoice.getId()).orElseThrow();
+        assertEquals(InvoiceStatus.PAID, paid.getStatus());
+        assertNotNull(paid.getPaidAt());
+        assertEquals(0, new BigDecimal("1000.00").compareTo(paid.getAmount()), "invoice amount must stay for audit");
+
+        ClientAccount refreshed = clientAccountRepository.findById(account.getId()).orElseThrow();
+        assertEquals(0, BigDecimal.ZERO.compareTo(refreshed.getBalance()));
+        assertTrue(financeService.hasNonNegativeBalance(client.getId()));
+
+        List<Transaction> txs = transactionRepository.findAll();
+        assertEquals(1, txs.size());
+        Transaction tx = txs.getFirst();
+        assertEquals(invoice.getId(), tx.getInvoiceId());
+        assertEquals(PaymentMethod.CARD, tx.getMethod());
+        assertEquals(0, new BigDecimal("1000.00").compareTo(tx.getAmount()));
+        assertEquals(tenant.getId(), tx.getTenantId());
+        assertNotNull(tx.getProcessedAt());
+    }
+
+    @Test
+    void pay_shouldAcceptCashMethod() {
+        saveAccount(new BigDecimal("-100.00"));
+        Invoice invoice = saveUnpaidInvoice(new BigDecimal("100.00"));
+
+        financeService.pay(invoice.getId(), PaymentMethod.CASH);
+
+        entityManager.flush();
+        entityManager.clear();
+
+        assertEquals(PaymentMethod.CASH, transactionRepository.findAll().getFirst().getMethod());
+        assertEquals(InvoiceStatus.PAID, invoiceRepository.findById(invoice.getId()).orElseThrow().getStatus());
+    }
+
+    @Test
+    void pay_beforeDueDate_shouldIncreaseBalanceByInvoiceAmount() {
+        // Current model: always balance += amount (early pay creates credit until you refine policy)
+        ClientAccount account = saveAccount(BigDecimal.ZERO);
+        Invoice invoice = saveUnpaidInvoice(new BigDecimal("1000.00"));
+        invoice.setDueDate(LocalDate.now().plusDays(2));
+        invoiceRepository.save(invoice);
+
+        financeService.pay(invoice.getId(), PaymentMethod.CASH);
+
+        entityManager.flush();
+        entityManager.clear();
+
+        ClientAccount refreshed = clientAccountRepository.findById(account.getId()).orElseThrow();
+        assertEquals(0, new BigDecimal("1000.00").compareTo(refreshed.getBalance()));
+        assertEquals(InvoiceStatus.PAID, invoiceRepository.findById(invoice.getId()).orElseThrow().getStatus());
+    }
+
+    @Test
+    void pay_shouldRejectSecondPayment_whenInvoiceAlreadyPaid() {
+        saveAccount(new BigDecimal("-1000.00"));
+        Invoice invoice = saveUnpaidInvoice(new BigDecimal("1000.00"));
+
+        financeService.pay(invoice.getId(), PaymentMethod.CASH);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> financeService.pay(invoice.getId(), PaymentMethod.CASH));
+        assertEquals("Invoice is already paid", ex.getMessage());
+
+        entityManager.flush();
+        entityManager.clear();
+
+        assertEquals(1, transactionRepository.findAll().size());
+        ClientAccount account = clientAccountRepository.findByClientId(client.getId()).orElseThrow();
+        assertEquals(0, BigDecimal.ZERO.compareTo(account.getBalance()));
+    }
+
+    @Test
+    void pay_shouldClearDebt_whenInvoiceIsOverdue() {
+        ClientAccount account = saveAccount(new BigDecimal("-1000.00"));
+        Invoice invoice = saveUnpaidInvoice(new BigDecimal("1000.00"));
+        invoice.setStatus(InvoiceStatus.OVERDUE);
+        invoiceRepository.save(invoice);
+
+        financeService.pay(invoice.getId(), PaymentMethod.CARD);
+
+        entityManager.flush();
+        entityManager.clear();
+
+        Invoice paid = invoiceRepository.findById(invoice.getId()).orElseThrow();
+        assertEquals(InvoiceStatus.PAID, paid.getStatus());
+        assertNotNull(paid.getPaidAt());
+
+        ClientAccount refreshed = clientAccountRepository.findById(account.getId()).orElseThrow();
+        assertEquals(0, BigDecimal.ZERO.compareTo(refreshed.getBalance()));
+        assertEquals(1, transactionRepository.findAll().size());
+    }
+
+    @Test
+    void pay_shouldReject_whenInvoiceIsCancelled() {
+        saveAccount(new BigDecimal("-100.00"));
+        Invoice invoice = saveUnpaidInvoice(new BigDecimal("100.00"));
+        invoice.setStatus(InvoiceStatus.CANCELLED);
+        invoiceRepository.save(invoice);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> financeService.pay(invoice.getId(), PaymentMethod.CASH));
+        assertEquals("Invoice is already paid", ex.getMessage());
+        assertEquals(0, transactionRepository.findAll().size());
+    }
+
+    @Test
+    void pay_shouldThrow_whenInvoiceNotFound() {
+        saveAccount(new BigDecimal("1000.00"));
+
+        assertThrows(ResourceNotFoundException.class, () -> financeService.pay(999_999L, PaymentMethod.CASH));
+    }
+
+    @Test
+    void pay_shouldThrow_whenClientAccountNotFound() {
+        Invoice invoice = saveUnpaidInvoice(new BigDecimal("1000.00"));
+
+        assertThrows(ResourceNotFoundException.class, () -> financeService.pay(invoice.getId(), PaymentMethod.CASH));
+    }
+
+    @Test
+    void pay_shouldThrow_whenInvoiceBelongsToAnotherTenant() {
+        saveAccount(new BigDecimal("-100.00"));
+        Invoice invoice = saveUnpaidInvoice(new BigDecimal("100.00"));
+
+        Tenant otherTenant = new Tenant();
+        otherTenant.setName("Other");
+        otherTenant.setSlug("other-" + System.nanoTime());
+        otherTenant.setActive(true);
+        otherTenant = tenantRepository.save(otherTenant);
+
+        User otherAdmin = new User();
+        otherAdmin.setTenant(otherTenant);
+        otherAdmin.setEmail("other-admin-" + System.nanoTime() + "@mail.ru");
+        otherAdmin.setPasswordHash("password");
+        otherAdmin.setRole(Role.TENANT_ADMIN);
+        otherAdmin.setFirstName("Other");
+        otherAdmin.setLastName("Admin");
+        otherAdmin.setActive(true);
+        otherAdmin = userRepository.save(otherAdmin);
+
+        TenantContext.set(otherTenant.getId(), otherAdmin.getId(), Role.TENANT_ADMIN);
+
+        assertThrows(ResourceNotFoundException.class,
+                () -> financeService.pay(invoice.getId(), PaymentMethod.CASH));
+    }
+
+    @Test
     void hasNonNegativeBalance_shouldReturnTrue_whenNoAccountExists() {
         assertTrue(financeService.hasNonNegativeBalance(client.getId()));
     }
 
     @Test
     void hasNonNegativeBalance_shouldReturnTrue_whenBalanceIsPositive() {
-        ClientAccount account = new ClientAccount();
-        account.setTenantId(tenant.getId());
-        account.setClientId(client.getId());
-        account.setBalance(new BigDecimal("1000.00"));
-        clientAccountRepository.save(account);
-
+        saveAccount(new BigDecimal("1000.00"));
         assertTrue(financeService.hasNonNegativeBalance(client.getId()));
     }
 
     @Test
     void hasNonNegativeBalance_shouldReturnTrue_whenBalanceIsZero() {
-        ClientAccount account = new ClientAccount();
-        account.setTenantId(tenant.getId());
-        account.setClientId(client.getId());
-        account.setBalance(BigDecimal.ZERO);
-        clientAccountRepository.save(account);
-
+        saveAccount(BigDecimal.ZERO);
         assertTrue(financeService.hasNonNegativeBalance(client.getId()));
     }
 
     @Test
     void hasNonNegativeBalance_shouldReturnFalse_whenBalanceIsNegative() {
-        ClientAccount account = new ClientAccount();
-        account.setTenantId(tenant.getId());
-        account.setClientId(client.getId());
-        account.setBalance(new BigDecimal("-1000.00"));
-        clientAccountRepository.save(account);
-
+        saveAccount(new BigDecimal("-1000.00"));
         assertFalse(financeService.hasNonNegativeBalance(client.getId()));
     }
 
@@ -192,5 +336,24 @@ class FinanceServiceIntegrationTest extends AbstractIntegrationTest {
         user.setLastName("Ivanov");
         user.setActive(true);
         return userRepository.save(user);
+    }
+
+    private ClientAccount saveAccount(BigDecimal balance) {
+        ClientAccount account = new ClientAccount();
+        account.setTenantId(tenant.getId());
+        account.setClientId(client.getId());
+        account.setBalance(balance);
+        return clientAccountRepository.save(account);
+    }
+
+    private Invoice saveUnpaidInvoice(BigDecimal amount) {
+        Invoice invoice = new Invoice();
+        invoice.setTenantId(tenant.getId());
+        invoice.setClientMembershipId(clientMembership.getId());
+        invoice.setClientId(client.getId());
+        invoice.setDueDate(LocalDate.now().minusDays(1));
+        invoice.setAmount(amount);
+        invoice.setStatus(InvoiceStatus.UNPAID);
+        return invoiceRepository.save(invoice);
     }
 }

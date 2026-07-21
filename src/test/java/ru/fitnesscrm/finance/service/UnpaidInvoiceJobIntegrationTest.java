@@ -99,8 +99,8 @@ class UnpaidInvoiceJobIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
-    void processUnpaidInvoice_shouldApplyDebt_whenInvoiceIsOverdue() {
-        saveInvoice(InvoiceStatus.UNPAID, LocalDate.now().minusDays(1), new BigDecimal("100.00"));
+    void processUnpaidInvoice_shouldApplyDebtAndMarkOverdue_whenInvoiceIsPastDue() {
+        Invoice invoice = saveInvoice(InvoiceStatus.UNPAID, LocalDate.now().minusDays(1), new BigDecimal("100.00"));
 
         unpaidInvoiceJob.processUnpaidInvoice();
         entityManager.flush();
@@ -108,12 +108,42 @@ class UnpaidInvoiceJobIntegrationTest extends AbstractIntegrationTest {
 
         ClientAccount account = clientAccountRepository.findByClientId(client.getId()).orElseThrow();
         assertEquals(0, new BigDecimal("-100.00").compareTo(account.getBalance()));
+
+        Invoice reloaded = invoiceRepository.findById(invoice.getId()).orElseThrow();
+        assertEquals(InvoiceStatus.OVERDUE, reloaded.getStatus());
+        assertEquals(0, new BigDecimal("100.00").compareTo(reloaded.getAmount()), "amount stays positive for audit/pay");
+    }
+
+    @Test
+    void processUnpaidInvoice_shouldNotApplyDebtTwice_whenAlreadyOverdue() {
+        Invoice invoice = saveInvoice(InvoiceStatus.UNPAID, LocalDate.now().minusDays(1), new BigDecimal("100.00"));
+
+        unpaidInvoiceJob.processUnpaidInvoice();
+        unpaidInvoiceJob.processUnpaidInvoice();
+        entityManager.flush();
+        entityManager.clear();
+
+        ClientAccount account = clientAccountRepository.findByClientId(client.getId()).orElseThrow();
+        assertEquals(0, new BigDecimal("-100.00").compareTo(account.getBalance()));
+        assertEquals(InvoiceStatus.OVERDUE, invoiceRepository.findById(invoice.getId()).orElseThrow().getStatus());
+    }
+
+    @Test
+    void processUnpaidInvoice_shouldIgnoreAlreadyOverdueInvoices() {
+        saveInvoice(InvoiceStatus.OVERDUE, LocalDate.now().minusDays(3), new BigDecimal("100.00"));
+
+        unpaidInvoiceJob.processUnpaidInvoice();
+        entityManager.flush();
+        entityManager.clear();
+
+        ClientAccount account = clientAccountRepository.findByClientId(client.getId()).orElseThrow();
+        assertEquals(0, BigDecimal.ZERO.compareTo(account.getBalance()));
     }
 
     @Test
     void processUnpaidInvoice_shouldNotTouchBalance_whenDueDateIsTodayOrFuture() {
-        saveInvoice(InvoiceStatus.UNPAID, LocalDate.now(), new BigDecimal("100.00"));
-        saveInvoice(InvoiceStatus.UNPAID, LocalDate.now().plusDays(2), new BigDecimal("50.00"));
+        Invoice today = saveInvoice(InvoiceStatus.UNPAID, LocalDate.now(), new BigDecimal("100.00"));
+        Invoice future = saveInvoice(InvoiceStatus.UNPAID, LocalDate.now().plusDays(2), new BigDecimal("50.00"));
 
         unpaidInvoiceJob.processUnpaidInvoice();
         entityManager.flush();
@@ -121,11 +151,13 @@ class UnpaidInvoiceJobIntegrationTest extends AbstractIntegrationTest {
 
         ClientAccount account = clientAccountRepository.findByClientId(client.getId()).orElseThrow();
         assertEquals(0, BigDecimal.ZERO.compareTo(account.getBalance()));
+        assertEquals(InvoiceStatus.UNPAID, invoiceRepository.findById(today.getId()).orElseThrow().getStatus());
+        assertEquals(InvoiceStatus.UNPAID, invoiceRepository.findById(future.getId()).orElseThrow().getStatus());
     }
 
     @Test
     void processUnpaidInvoice_shouldIgnorePaidInvoicesEvenIfPastDue() {
-        saveInvoice(InvoiceStatus.PAID, LocalDate.now().minusDays(5), new BigDecimal("100.00"));
+        Invoice paid = saveInvoice(InvoiceStatus.PAID, LocalDate.now().minusDays(5), new BigDecimal("100.00"));
 
         unpaidInvoiceJob.processUnpaidInvoice();
         entityManager.flush();
@@ -133,12 +165,13 @@ class UnpaidInvoiceJobIntegrationTest extends AbstractIntegrationTest {
 
         ClientAccount account = clientAccountRepository.findByClientId(client.getId()).orElseThrow();
         assertEquals(0, BigDecimal.ZERO.compareTo(account.getBalance()));
+        assertEquals(InvoiceStatus.PAID, invoiceRepository.findById(paid.getId()).orElseThrow().getStatus());
     }
 
     @Test
     void processUnpaidInvoice_shouldAccumulateDebt_forMultipleOverdueInvoices() {
-        saveInvoice(InvoiceStatus.UNPAID, LocalDate.now().minusDays(1), new BigDecimal("40.00"));
-        saveInvoice(InvoiceStatus.UNPAID, LocalDate.now().minusDays(2), new BigDecimal("60.00"));
+        Invoice first = saveInvoice(InvoiceStatus.UNPAID, LocalDate.now().minusDays(1), new BigDecimal("40.00"));
+        Invoice second = saveInvoice(InvoiceStatus.UNPAID, LocalDate.now().minusDays(2), new BigDecimal("60.00"));
 
         unpaidInvoiceJob.processUnpaidInvoice();
         entityManager.flush();
@@ -146,9 +179,11 @@ class UnpaidInvoiceJobIntegrationTest extends AbstractIntegrationTest {
 
         ClientAccount account = clientAccountRepository.findByClientId(client.getId()).orElseThrow();
         assertEquals(0, new BigDecimal("-100.00").compareTo(account.getBalance()));
+        assertEquals(InvoiceStatus.OVERDUE, invoiceRepository.findById(first.getId()).orElseThrow().getStatus());
+        assertEquals(InvoiceStatus.OVERDUE, invoiceRepository.findById(second.getId()).orElseThrow().getStatus());
     }
 
-    private void saveInvoice(InvoiceStatus status, LocalDate dueDate, BigDecimal amount) {
+    private Invoice saveInvoice(InvoiceStatus status, LocalDate dueDate, BigDecimal amount) {
         Invoice invoice = new Invoice();
         invoice.setTenantId(tenant.getId());
         invoice.setClientId(client.getId());
@@ -156,6 +191,6 @@ class UnpaidInvoiceJobIntegrationTest extends AbstractIntegrationTest {
         invoice.setAmount(amount);
         invoice.setDueDate(dueDate);
         invoice.setStatus(status);
-        invoiceRepository.save(invoice);
+        return invoiceRepository.save(invoice);
     }
 }

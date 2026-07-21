@@ -34,7 +34,8 @@ public class UnpaidInvoiceJob {
                         unpaidInvoice.getAmount().negate()
                 );
             }
-            return null;
+            List<Long> ids = unpaidInvoices.stream().map(Invoice::getId).toList();
+            return invoiceRepository.updateStatusByIds(InvoiceStatus.OVERDUE, ids);
         });
     }
 
