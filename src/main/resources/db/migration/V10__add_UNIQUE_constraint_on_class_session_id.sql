@@ -1,0 +1,1 @@
+ALTER TABLE trainer_payroll ADD CONSTRAINT uq_trainer_payroll_class_session UNIQUE (class_session_id);

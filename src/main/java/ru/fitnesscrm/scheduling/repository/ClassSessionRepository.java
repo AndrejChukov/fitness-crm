@@ -33,4 +33,6 @@ public interface ClassSessionRepository extends JpaRepository<ClassSession, Long
             @Param("startTime") Instant startTime,
             @Param("endTime") Instant endTime
     );
+
+    List<ClassSession> findByEndTimeBefore(Instant time);
 }

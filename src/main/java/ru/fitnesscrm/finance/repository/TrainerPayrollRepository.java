@@ -4,4 +4,5 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import ru.fitnesscrm.finance.domain.TrainerPayroll;
 
 public interface TrainerPayrollRepository extends JpaRepository<TrainerPayroll, Long> {
+    boolean existsByClassSessionId(Long id);
 }
