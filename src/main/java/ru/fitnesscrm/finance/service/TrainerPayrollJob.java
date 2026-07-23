@@ -9,7 +9,7 @@ import ru.fitnesscrm.common.tenant.TenantContext;
 import ru.fitnesscrm.finance.domain.PayrollStatus;
 import ru.fitnesscrm.finance.domain.TrainerPayroll;
 import ru.fitnesscrm.finance.repository.TrainerPayrollRepository;
-import ru.fitnesscrm.scheduling.domain.ClassSession;
+import ru.fitnesscrm.scheduling.facade.EndedClassSessionView;
 import ru.fitnesscrm.scheduling.facade.SchedulingFacade;
 
 import java.math.BigDecimal;
@@ -24,28 +24,28 @@ public class TrainerPayrollJob {
     private final SchedulingFacade schedulingFacade;
     private final TrainerPayrollRepository trainerPayrollRepository;
 
-    private final static BigDecimal BASE_AMOUNT = BigDecimal.TEN;
-    private final static BigDecimal BONUS_AMOUNT = BigDecimal.TWO;
+    private static final BigDecimal BASE_AMOUNT = BigDecimal.TEN;
+    private static final BigDecimal BONUS_AMOUNT = BigDecimal.TWO;
 
     @Scheduled(cron = "0 0 18 * * *")
     @Transactional
     public void calculatePayroll() {
         TenantContext.executeWithoutFilter(() -> {
             Instant now = Instant.now();
-            List<ClassSession> classSessions = schedulingFacade.getEndedClassSessions(now);
+            List<EndedClassSessionView> classSessions = schedulingFacade.getEndedClassSessions(now);
 
-            for (ClassSession classSession : classSessions) {
-                if (trainerPayrollRepository.existsByClassSessionId(classSession.getId())) {
+            for (EndedClassSessionView classSession : classSessions) {
+                if (trainerPayrollRepository.existsByClassSessionId(classSession.id())) {
                     continue;
                 }
-                long countBookings = schedulingFacade.countAttendedBookingsBySessionId(classSession.getId());
+                long countBookings = schedulingFacade.countAttendedBookingsBySessionId(classSession.id());
 
                 BigDecimal bonusAmount = BigDecimal.valueOf(countBookings).multiply(BONUS_AMOUNT);
 
                 TrainerPayroll trainerPayroll = new TrainerPayroll();
-                trainerPayroll.setTenantId(classSession.getTenantId());
-                trainerPayroll.setTrainerId(classSession.getTrainerId());
-                trainerPayroll.setClassSessionId(classSession.getId());
+                trainerPayroll.setTenantId(classSession.tenantId());
+                trainerPayroll.setTrainerId(classSession.trainerId());
+                trainerPayroll.setClassSessionId(classSession.id());
                 trainerPayroll.setBaseAmount(BASE_AMOUNT);
                 trainerPayroll.setBonusAmount(bonusAmount);
                 trainerPayroll.setTotalAmount(BASE_AMOUNT.add(bonusAmount));
@@ -56,22 +56,4 @@ public class TrainerPayrollJob {
             return null;
         });
     }
-
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
