@@ -9,7 +9,7 @@ import ru.fitnesscrm.common.exception.ResourceNotFoundException;
 import ru.fitnesscrm.common.tenant.TenantContext;
 import ru.fitnesscrm.finance.facade.FinanceFacade;
 import ru.fitnesscrm.identity.domain.Role;
-import ru.fitnesscrm.identity.repository.UserRepository;
+import ru.fitnesscrm.identity.facade.IdentityFacade;
 import ru.fitnesscrm.memberships.api.dto.request.AssignMembershipRequest;
 import ru.fitnesscrm.memberships.api.dto.response.ClientMembershipResponse;
 import ru.fitnesscrm.memberships.domain.ClientMembership;
@@ -38,10 +38,10 @@ public class ClientMembershipService {
     private static final int MAX_FREEZE_DAYS = 14;
 
     private final FinanceFacade financeFacade;
+    private final IdentityFacade identityFacade;
 
     private final ClientMembershipRepository membershipRepository;
     private final MembershipTemplateRepository templateRepository;
-    private final UserRepository userRepository;
     private final MembershipMapper membershipMapper;
 
     @Transactional
@@ -50,10 +50,7 @@ public class ClientMembershipService {
         MembershipTemplate template = templateRepository.findById(request.templateId())
                 .orElseThrow(() -> new ResourceNotFoundException("Membership template not found: " + request.templateId()));
 
-        userRepository.findById(request.clientId())
-                .filter(user -> tenantId.equals(user.getTenantId()))
-                .filter(user -> user.getRole() == Role.CLIENT)
-                .orElseThrow(() -> new BusinessException("Client not found in current tenant"));
+        identityFacade.requireClientInTenant(request.clientId(), tenantId);
 
         LocalDate startDate = LocalDate.now();
         ClientMembership membership = new ClientMembership();

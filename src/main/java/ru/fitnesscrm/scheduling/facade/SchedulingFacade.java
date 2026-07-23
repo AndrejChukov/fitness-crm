@@ -3,7 +3,6 @@ package ru.fitnesscrm.scheduling.facade;
 import lombok.AllArgsConstructor;
 import org.springframework.stereotype.Component;
 import ru.fitnesscrm.scheduling.domain.BookingStatus;
-import ru.fitnesscrm.scheduling.domain.ClassSession;
 import ru.fitnesscrm.scheduling.repository.BookingRepository;
 import ru.fitnesscrm.scheduling.repository.ClassSessionRepository;
 
@@ -17,12 +16,13 @@ public class SchedulingFacade {
     private final BookingRepository bookingRepository;
     private final ClassSessionRepository classSessionRepository;
 
-    public List<ClassSession> getEndedClassSessions(Instant time) {
-        return classSessionRepository.findByEndTimeBefore(time);
+    public List<EndedClassSessionView> getEndedClassSessions(Instant time) {
+        return classSessionRepository.findByEndTimeBefore(time).stream()
+                .map(s -> new EndedClassSessionView(s.getId(), s.getTenantId(), s.getTrainerId()))
+                .toList();
     }
 
     public long countAttendedBookingsBySessionId(Long sessionId) {
         return bookingRepository.countByClassSessionIdAndStatus(sessionId, BookingStatus.ATTENDED);
     }
-
 }
